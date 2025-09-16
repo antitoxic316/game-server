@@ -3,7 +3,6 @@
 int server_socket_init(){
   int sockfd;
 	struct addrinfo hints, *servinfo, *p;
-	struct sigaction sa;
 	int yes=1;
 	char s[INET6_ADDRSTRLEN];
 	int rv;
@@ -11,7 +10,7 @@ int server_socket_init(){
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_INET;
 	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_flags = INADDR_ANY; // use my IP
+	hints.ai_flags = AI_PASSIVE; // use my IP
 
 	if ((rv = getaddrinfo(NULL, PORT, &hints, &servinfo)) != 0) {
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
@@ -52,6 +51,8 @@ int server_socket_init(){
 		perror("listen");
 		exit(1);
 	}
+
+	printf("server is ready for listening\n");
 
   return sockfd;
 }
