@@ -56,7 +56,3 @@ int server_socket_init(){
 
   return sockfd;
 }
-
-void server_accept_client(int serv_sock){
-
-}

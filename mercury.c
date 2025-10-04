@@ -130,17 +130,13 @@ int main(void)
 			continue;
 		}
 
-		struct pollfd *pfds = malloc(sizeof(*pfds) * PLAYERS_PER_SESSION);
 		int players_n = PLAYERS_PER_SESSION;
-		int game_clients = 2;
 		for(int i = 0; i < players_n; i++){
-			//always zero because remove_client function shifts all members
-			pfds[i] = waiting_clients[0];
-			ncli = pfds_remove_client(&waiting_clients, &queue_size, ncli, 0);
+			waiting_clients[i].events = POLLOUT | POLLHUP;
 		}
 
 		while(true){ // GAME SYNC LOOP
-			int events_n = poll(pfds, players_n, PLAYER_CONNECTION_TIMEOUT);
+			int events_n = poll(waiting_clients, players_n, PLAYER_CONNECTION_TIMEOUT);
 
 			if(events_n == -1){
 				perror("poll");
@@ -148,18 +144,50 @@ int main(void)
 			}
 
 			if(events_n < players_n){
-				//reset queue
+				continue;
 			}
 
 			for(int i = 0; i < players_n; i++){
-				if(pfds[i].revents & POLLOUT){
-					int r = send(pfds[i].fd, "GAME_STARTED\r", 13+1, 0);	
+				if(waiting_clients[i].revents & POLLHUP){
+					//break the game session
+				}
+				if(waiting_clients[i].revents & POLLOUT){
+					int r = send(waiting_clients[i].fd, "INIT_STARTED\r", 13+1, 0);	
 				}
 			}
 			break;
 		}
 
-		sleep(10);
+		for(int i = 0; i < players_n; i++){
+			waiting_clients[i].events = POLLIN | POLLHUP;
+		}
+
+		while(true){
+			int events_n = poll(waiting_clients, players_n, PLAYER_CONNECTION_TIMEOUT);
+		
+			if(events_n == -1){
+				perror("poll");
+				exit(1);
+			}
+
+			for(int i = 0; i < players_n; i++){
+				if(waiting_clients[i].revents & POLLHUP){
+					//break the game session
+				}
+				if(waiting_clients[i].revents & POLLIN){
+					char buff[256] = {'\0',};
+
+					int r = recv(waiting_clients[i].fd, buff, 256, 0);	
+
+					for(int j = 0; j < players_n; j++){
+						if(j == i){
+							continue;
+						}
+						send(waiting_clients[j].fd, buff, r, 0);
+					}
+				}
+			}
+		}
 
 		//recv game data and obj data
 		//create structs for sockfd and obj that he needs
