@@ -10,23 +10,7 @@
 
 #include "gameserver.h"
 
-#define PLAYERS_PER_SESSION 2
-
 #define PLAYER_CONNECTION_TIMEOUT 10000 //ms
-
-struct obj_data{
-	char **field_names;
-	void **field_val;
-	size_t *field_size;
-	int field_n;
-};
-
-struct client_info {
-	int tcp_sock;
-	int udp_sock;
-	struct obj_data *objs;
-	int objs_n;
-};
 
 void sigchld_handler(int s)
 {
@@ -38,45 +22,6 @@ void sigchld_handler(int s)
 	while(waitpid(-1, NULL, WNOHANG) > 0);
 
 	errno = saved_errno;
-}
-
-//returns number of clients
-int pfds_add_client(struct pollfd *pfds[], int *size, int ncli, int sockfd, short events){
-	if(ncli == *size){
-		*size *= 2;
-		*pfds = realloc(*pfds, sizeof(*pfds) * *size);
-	}
-
-	(*pfds)[ncli].fd = sockfd;
-	(*pfds)[ncli].events = events;
-	(*pfds)[ncli].revents = 0;
-
-	return ++ncli;
-}
-
-//returns number of clients
-int pfds_remove_client(struct pollfd *pfds[], int *size, int ncli, int i){
-	if(*size/2 > ncli && *size > 8){
-		*pfds = realloc(*pfds, sizeof(*pfds) * *size/2);
-		*size = *size/2;
-	}
-	
-	if(ncli == 1) return 0;
-
-	if(i >= ncli){
-		return ncli;
-	}
-
-	if(i == ncli-1){
-		return --ncli;
-	}
-	//memory past ncli-1 is unitialized
-	while(i < ncli-1){
-		// the current one is the one for deletion;
-		(*pfds)[i] = (*pfds)[i+1];
-		i++;
-	}
-	return --ncli;
 }
 
 int main(void)
@@ -96,115 +41,131 @@ int main(void)
 
 
 	int queue_size = 8;
+	struct pollfd *queue_pfds = malloc(sizeof(*queue_pfds) * queue_size);
+	bool bad_session = false;
+
 	int ncli = 0;
-	struct pollfd *waiting_clients = malloc(sizeof(*waiting_clients) * queue_size);
+	struct client **clients = malloc(sizeof(struct client*) * PLAYERS_PER_SESSION);
 
 	for(;;){
-		int cl_sock;
-		struct sockaddr_storage their_addr; // connector's address information
-		socklen_t sin_size;
-		
-		printf("waiting for connections\n");
-		cl_sock = accept(serv_sock, (struct sockaddr *)&their_addr, &sin_size);
+		do {
+			struct client *cli = accept_client(&queue_pfds, &queue_size, ncli, serv_sock);
+			clients[ncli++] = cli;
+		} while (PLAYERS_PER_SESSION - ncli);
 
-		if(cl_sock < 0){
-			perror("accept");
-			continue;
-		}
-		ncli = pfds_add_client(&waiting_clients, &queue_size, ncli, cl_sock, POLLOUT);
-		printf("added connection %d, number of conns: %d\n", cl_sock, ncli);
-
-		//recieve how many players needed for session?
-
-		if(ncli % PLAYERS_PER_SESSION != 0){
-			int poll_n = poll(waiting_clients, ncli, -1);
-
-			if(poll_n == -1){
-				perror("poll");
-				exit(1);
-			}
-
-			for(int i = 0; i < ncli; i++){
-				int r = send(waiting_clients[i].fd, "WAITING_FOR_GAME\r", 17+1, 0);
-			}
-			continue;
+		for(int i = 0; i < PLAYERS_PER_SESSION; i++){
+			queue_pfds[i].events = POLLOUT | POLLHUP;
 		}
 
-		int players_n = PLAYERS_PER_SESSION;
-		for(int i = 0; i < players_n; i++){
-			waiting_clients[i].events = POLLOUT | POLLHUP;
-		}
-
-		while(true){ // GAME SYNC LOOP
-			int events_n = poll(waiting_clients, players_n, PLAYER_CONNECTION_TIMEOUT);
+		while(true){ // QUEUE LOOP
+			int events_n = poll(queue_pfds, PLAYERS_PER_SESSION, PLAYER_CONNECTION_TIMEOUT);
 
 			if(events_n == -1){
 				perror("poll");
 				exit(1);
 			}
 
-			if(events_n < players_n){
+			if(events_n < PLAYERS_PER_SESSION){
 				continue;
 			}
 
-			for(int i = 0; i < players_n; i++){
-				if(waiting_clients[i].revents & POLLHUP){
-					//break the game session
+			for(int i = 0; i < PLAYERS_PER_SESSION; i++){
+				if(queue_pfds[i].revents & POLLHUP){ 
+					bad_session = true;
+					break;
 				}
-				if(waiting_clients[i].revents & POLLOUT){
-					int r = send(waiting_clients[i].fd, "INIT_STARTED\r", 13+1, 0);	
+				if(queue_pfds[i].revents & POLLOUT){
+					int r = send(queue_pfds[i].fd, "INIT_STARTED\r", 13+1, 0);	
 				}
 			}
 			break;
+		} // end QUEUE LOOP
+
+		if(bad_session){
+			for(int i = 0; i < PLAYERS_PER_SESSION; i++){
+				if(queue_pfds[i].revents & POLLHUP){
+					continue;
+				}
+				int r = send(queue_pfds[i].fd, "SESSION_CANCELED\r", 17+1, 0);	
+			}
+			continue; // restart the session
 		}
 
-		for(int i = 0; i < players_n; i++){
-			waiting_clients[i].events = POLLIN | POLLHUP;
+		// FORK HERE IN THEORY
+
+
+		for(int i = 0; i < PLAYERS_PER_SESSION; i++){
+			queue_pfds[i].events = POLLIN | POLLHUP;
 		}
 
-		while(true){
-			int events_n = poll(waiting_clients, players_n, PLAYER_CONNECTION_TIMEOUT);
+		bool initialized = false;
+		while(!initialized){ // GAME SESSION INIT LOOP
+			int events_n = poll(queue_pfds, PLAYERS_PER_SESSION,100);
 		
 			if(events_n == -1){
 				perror("poll");
 				exit(1);
 			}
 
-			for(int i = 0; i < players_n; i++){
-				if(waiting_clients[i].revents & POLLHUP){
-					//break the game session
+			for(int i = 0; i < PLAYERS_PER_SESSION; i++){
+				if(queue_pfds[i].revents & POLLHUP){
+					printf("client broke the connection\n");
+					exit(-1);
 				}
-				if(waiting_clients[i].revents & POLLIN){
+				if(queue_pfds[i].revents & POLLIN){
 					char buff[256] = {'\0',};
+					int r = recv(queue_pfds[i].fd, buff, 256-1, 0);	
 
-					int r = recv(waiting_clients[i].fd, buff, 256, 0);	
+					struct client* cli = NULL;
+					for(int i = 0; i < ncli; i++){
+						if(clients[i]->tcp_sock == queue_pfds[i].fd){
+							cli = clients[i];
+							break;
+						}
+					}
 
-					for(int j = 0; j < players_n; j++){
+					if(!cli){
+						printf("client not found");
+						exit(-1);
+					}
+
+					printf("%s\n", buff);
+
+					if(!strcmp(buff, "READY")){
+						cli->ready = true;
+						continue;
+					}
+
+					int echo_packet = 0;
+					client_handle_packet(cli, buff, 256-1, &echo_packet);
+					
+					if(!echo_packet){
+						continue;
+					}
+
+					for(int j = 0; j < PLAYERS_PER_SESSION; j++){
 						if(j == i){
 							continue;
 						}
-						send(waiting_clients[j].fd, buff, r, 0);
+						send(queue_pfds[j].fd, buff, r, 0);
 					}
 				}
 			}
-		}
 
-		//recv game data and obj data
-		//create structs for sockfd and obj that he needs
-		//create polls with handlers
-
-		/*
-		if((pid = fork()) < 0){
-			perror("fork");
-			exit(1);
-		}
-
-		if(pid == 0){ //game sync session
-			while(true){
-
+			initialized = true;
+			for(int i = 0; i < ncli; i++){
+				if(!clients[i]->ready){
+					initialized = false;
+					break;
+				}
 			}
-		}
-		*/
+		} // end GAME SESSION INIT LOOP
+		
+		//init upd socket
+
+		while(true){ // GAME SESSION LOOP
+			break;
+		} // end GAME SESSION LOOP
 		break;
 	}
 
