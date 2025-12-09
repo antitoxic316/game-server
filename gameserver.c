@@ -1,7 +1,16 @@
 #include <string.h>
+#include <stdbool.h>
 
 #include "gameserver.h"
 #include "cJSON.h"
+
+void *get_in_addr(struct sockaddr *sa)
+{
+  if (sa->sa_family == AF_INET) {
+    return &(((struct sockaddr_in*)sa)->sin_addr);
+  }
+  return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
 
 void pfds_add_client(struct pollfd *pfds[], int *size, int ncli, int sockfd, short events){
 	if(ncli == *size){
@@ -43,7 +52,6 @@ int server_socket_init(){
   int sockfd;
 	struct addrinfo hints, *servinfo, *p;
 	int yes=1;
-	char s[INET6_ADDRSTRLEN];
 	int rv;
 
 	memset(&hints, 0, sizeof hints);
@@ -122,6 +130,8 @@ struct client *accept_client(
 	client_info->objs_n = 0;
 	client_info->tcp_sock = cl_sock;
 	client_info->udp_sock = 0;
+	client_info->addr_len = sizeof client_info->addr;
+
 	client_info->ready = false;
 
 	return client_info;
@@ -233,6 +243,7 @@ void client_handle_packet(struct client* cli, char *buff, size_t nbuff, int *ech
 			}
 		}
 		if(!target_obj){
+			printf("no object found\n");
 			goto cleanup;
 		}
 
@@ -274,4 +285,45 @@ cleanup:
 			printf("Error: %s\n", error_ptr);
 	}
 	cJSON_Delete(json);
+}
+
+void client_init_udp_socket(int *udp_sockfd){
+	int sockfd;
+	struct addrinfo hints, *servinfo, *p;
+	int rv;
+
+	memset(&hints, 0, sizeof hints);
+	hints.ai_family = AF_INET; // set to AF_INET to use IPv4
+	hints.ai_socktype = SOCK_DGRAM;
+	hints.ai_flags = AI_PASSIVE; // use my IP
+
+	if ((rv = getaddrinfo(NULL, PORT, &hints, &servinfo)) != 0) {
+		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+		exit(-1);
+	}
+
+	// loop through all the results and bind to the first we can
+	for(p = servinfo; p != NULL; p = p->ai_next) {
+		if ((sockfd = socket(p->ai_family, p->ai_socktype,
+				p->ai_protocol)) == -1) {
+			perror("listener: socket");
+			continue;
+		}
+		if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
+			close(sockfd);
+			perror("listener: bind");
+			continue;
+		}
+		break;
+	}
+
+	if (p == NULL) {
+		fprintf(stderr, "listener: failed to bind socket\n");
+		exit(-1);
+	}
+	freeaddrinfo(servinfo);
+
+	*udp_sockfd = sockfd;
+
+	printf("initilized udp socket\n");
 }

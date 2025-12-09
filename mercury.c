@@ -34,7 +34,6 @@ int main(void)
 		perror("sigaction");
 		exit(1);
 	}
-	int pid;
 	int serv_sock;
 
 	serv_sock = server_socket_init();
@@ -117,21 +116,21 @@ int main(void)
 					int r = recv(queue_pfds[i].fd, buff, 256-1, 0);	
 
 					struct client* cli = NULL;
-					for(int i = 0; i < ncli; i++){
-						if(clients[i]->tcp_sock == queue_pfds[i].fd){
-							cli = clients[i];
+					for(int j = 0; j < ncli; j++){
+						if(clients[j]->tcp_sock == queue_pfds[i].fd){
+							cli = clients[j];
 							break;
 						}
 					}
 
 					if(!cli){
-						printf("client not found");
+						printf("client not found\n");
 						exit(-1);
 					}
 
-					printf("%s\n", buff);
+					printf("tcp: %s\n", buff);
 
-					if(!strcmp(buff, "READY")){
+					if(!strcmp(buff, "READY\r\n")){
 						cli->ready = true;
 						continue;
 					}
@@ -162,13 +161,113 @@ int main(void)
 		} // end GAME SESSION INIT LOOP
 		
 		//init upd socket
+		int udp_sockfd;
+
+		struct pollfd *session_pfds = malloc(sizeof(*session_pfds) * ncli);
+		client_init_udp_socket(&udp_sockfd);
+		if(udp_sockfd <= 0){
+			printf("failed to initialize udp socket\n");
+			exit(-1);
+		}
+		for(int i = 0; i < ncli; i++){
+			clients[i]->udp_sock = udp_sockfd;
+			session_pfds[i].fd = udp_sockfd;
+			session_pfds[i].events = POLLIN;
+		
+			char buff[8];
+			char s[INET6_ADDRSTRLEN];
+			struct sockaddr_storage tmp_addr;
+			socklen_t tmp_addr_len = sizeof tmp_addr;
+
+			bool is_unique = false;
+			do {
+
+				printf("checking for client\n");
+				int r = recvfrom(session_pfds[i].fd, buff, 8, 0, 
+												 (struct sockaddr*) &tmp_addr, 
+												 &tmp_addr_len);	
+				
+				is_unique = true;
+				for(int j = 0; j < ncli; j++){
+					if(!memcmp(&clients[j]->addr, &tmp_addr, sizeof(tmp_addr))){
+						is_unique = false;
+						break;
+					}
+				}
+			} while(!is_unique);
+			clients[i]->addr = tmp_addr;
+			clients[i]->addr_len = tmp_addr_len;
+
+			printf("listener: got %s from %s\n", buff,
+					inet_ntop(clients[i]->addr.ss_family,
+						get_in_addr((struct sockaddr *)&(clients[i]->addr)),
+							s, sizeof s));
+							
+		}
 
 		while(true){ // GAME SESSION LOOP
-			break;
+			int events_n = poll(session_pfds, ncli, 100);
+		
+			if(events_n == -1){
+				perror("poll");
+				exit(1);
+			}
+
+			for(int i = 0; i < PLAYERS_PER_SESSION; i++){
+				if(session_pfds[i].revents & POLLIN){
+					char buff[256] = {'\0',};
+
+					struct sockaddr_storage cli_addr;
+					socklen_t addr_len = sizeof(cli_addr);
+
+					int r = recvfrom(session_pfds[i].fd, buff, 256-1, 0, 
+													 (struct sockaddr*) &cli_addr, &addr_len);	
+					if(r == -1){
+						perror("recvfrom");
+						exit(-1);
+					}
+
+					int curr_client_i = -1;
+					struct client* cli = NULL;
+					for(int j = 0; j < ncli; j++){
+						if(!memcmp(&clients[j]->addr, &cli_addr, sizeof(cli_addr))){
+							cli = clients[j];
+							curr_client_i = j;
+							break;
+						}
+					}
+
+					if(!cli){
+						printf("client not found\n");
+						exit(-1);
+					}
+
+					printf("udp: %s\n", buff);
+
+					int echo_packet = 0;
+					client_handle_packet(cli, buff, 256-1, &echo_packet);
+					
+					if(!echo_packet){
+						continue;
+					}
+
+					for(int j = 0; j < PLAYERS_PER_SESSION; j++){
+						if(j == curr_client_i){
+							continue;
+						}
+						sendto(session_pfds[j].fd, buff, r, 0,
+									 (struct sockaddr *)&clients[j]->addr, clients[j]->addr_len);
+					}
+				}
+			}
 		} // end GAME SESSION LOOP
 		break;
 	}
 
 	close(serv_sock);
+	close(clients[0]->udp_sock);
+	for(int i = 0; i < ncli; i++){
+		close(clients[i]->tcp_sock);
+	}
 	return 0;
 }
