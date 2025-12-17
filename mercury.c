@@ -7,6 +7,7 @@
 #include <string.h>
 #include <poll.h>
 #include <stdbool.h>
+#include <time.h>
 
 #include "gameserver.h"
 
@@ -35,13 +36,10 @@ int main(void)
 		exit(1);
 	}
 	int serv_sock;
-
 	serv_sock = server_socket_init();
-
 
 	int queue_size = 8;
 	struct pollfd *queue_pfds = malloc(sizeof(*queue_pfds) * queue_size);
-	bool bad_session = false;
 
 	int ncli = 0;
 	struct client **clients = malloc(sizeof(struct client*) * PLAYERS_PER_SESSION);
@@ -50,7 +48,7 @@ int main(void)
 		do {
 			struct client *cli = accept_client(&queue_pfds, &queue_size, ncli, serv_sock);
 			clients[ncli++] = cli;
-		} while (PLAYERS_PER_SESSION - ncli);
+		} while (PLAYERS_PER_SESSION - ncli); // queue loop
 
 		for(int i = 0; i < PLAYERS_PER_SESSION; i++){
 			queue_pfds[i].events = POLLOUT | POLLHUP;
@@ -61,7 +59,7 @@ int main(void)
 
 			if(events_n == -1){
 				perror("poll");
-				exit(1);
+				goto SESSION_CANCELATION;
 			}
 
 			if(events_n < PLAYERS_PER_SESSION){
@@ -70,28 +68,18 @@ int main(void)
 
 			for(int i = 0; i < PLAYERS_PER_SESSION; i++){
 				if(queue_pfds[i].revents & POLLHUP){ 
-					bad_session = true;
-					break;
+					goto SESSION_CANCELATION;
 				}
 				if(queue_pfds[i].revents & POLLOUT){
 					int r = send(queue_pfds[i].fd, "INIT_STARTED\r", 13+1, 0);	
+					if(r == -1){
+						perror("send");
+						goto SESSION_CANCELATION;
+					}
 				}
 			}
 			break;
 		} // end QUEUE LOOP
-
-		if(bad_session){
-			for(int i = 0; i < PLAYERS_PER_SESSION; i++){
-				if(queue_pfds[i].revents & POLLHUP){
-					continue;
-				}
-				int r = send(queue_pfds[i].fd, "SESSION_CANCELED\r", 17+1, 0);	
-			}
-			continue; // restart the session
-		}
-
-		// FORK HERE IN THEORY
-
 
 		for(int i = 0; i < PLAYERS_PER_SESSION; i++){
 			queue_pfds[i].events = POLLIN | POLLHUP;
@@ -103,7 +91,7 @@ int main(void)
 		
 			if(events_n == -1){
 				perror("poll");
-				exit(1);
+				goto SESSION_CANCELATION;
 			}
 
 			for(int i = 0; i < PLAYERS_PER_SESSION; i++){
@@ -114,6 +102,10 @@ int main(void)
 				if(queue_pfds[i].revents & POLLIN){
 					char buff[256] = {'\0',};
 					int r = recv(queue_pfds[i].fd, buff, 256-1, 0);	
+					if(r == 0){
+						perror("recv");
+						goto SESSION_CANCELATION;
+					}
 
 					struct client* cli = NULL;
 					for(int j = 0; j < ncli; j++){
@@ -129,8 +121,9 @@ int main(void)
 					}
 
 					printf("tcp: %s\n", buff);
-
-					if(!strcmp(buff, "READY\r\n")){
+					for (int i = 0; i < 256; i++)
+    				printf("%02X ", buff[i]);
+					if(strstr(buff, "READY")){
 						cli->ready = true;
 						continue;
 					}
@@ -147,6 +140,10 @@ int main(void)
 							continue;
 						}
 						send(queue_pfds[j].fd, buff, r, 0);
+						if(r == -1){
+							perror("send");
+							goto SESSION_CANCELATION;
+						}
 					}
 				}
 			}
@@ -159,7 +156,7 @@ int main(void)
 				}
 			}
 		} // end GAME SESSION INIT LOOP
-		
+
 		//init upd socket
 		int udp_sockfd;
 
@@ -174,16 +171,15 @@ int main(void)
 			session_pfds[i].fd = udp_sockfd;
 			session_pfds[i].events = POLLIN;
 		
-			char buff[8];
+			char buff[8] = {'\0',};
 			char s[INET6_ADDRSTRLEN];
 			struct sockaddr_storage tmp_addr;
 			socklen_t tmp_addr_len = sizeof tmp_addr;
 
 			bool is_unique = false;
 			do {
-
 				printf("checking for client\n");
-				int r = recvfrom(session_pfds[i].fd, buff, 8, 0, 
+				int r = recvfrom(session_pfds[i].fd, buff, 7, 0, 
 												 (struct sockaddr*) &tmp_addr, 
 												 &tmp_addr_len);	
 				
@@ -202,7 +198,13 @@ int main(void)
 					inet_ntop(clients[i]->addr.ss_family,
 						get_in_addr((struct sockaddr *)&(clients[i]->addr)),
 							s, sizeof s));
-							
+		}
+
+		for(int i = 0; i < ncli; i++){
+			int r = send(clients[i]->tcp_sock, "GAME_STARTED\r\n", 13, 0);
+			if(r == -1){
+				goto SESSION_CANCELATION;
+			}
 		}
 
 		while(true){ // GAME SESSION LOOP
@@ -210,7 +212,7 @@ int main(void)
 		
 			if(events_n == -1){
 				perror("poll");
-				exit(1);
+				goto SESSION_CANCELATION;
 			}
 
 			for(int i = 0; i < PLAYERS_PER_SESSION; i++){
@@ -224,7 +226,7 @@ int main(void)
 													 (struct sockaddr*) &cli_addr, &addr_len);	
 					if(r == -1){
 						perror("recvfrom");
-						exit(-1);
+						goto SESSION_CANCELATION;
 					}
 
 					int curr_client_i = -1;
@@ -236,10 +238,19 @@ int main(void)
 							break;
 						}
 					}
-
 					if(!cli){
 						printf("client not found\n");
-						exit(-1);
+						continue;
+					}
+
+					if(cli->udp_packet_time != 0){
+						if(time(NULL) - cli->udp_packet_time > 3){
+							cli->timed_out = true;
+							printf("client got timed out\n");
+							goto SESSION_CANCELATION;
+						}
+					} else {
+						cli->udp_packet_time = time(NULL);
 					}
 
 					printf("udp: %s\n", buff);
@@ -255,13 +266,24 @@ int main(void)
 						if(j == curr_client_i){
 							continue;
 						}
-						sendto(session_pfds[j].fd, buff, r, 0,
+						r = sendto(session_pfds[j].fd, buff, r, 0,
 									 (struct sockaddr *)&clients[j]->addr, clients[j]->addr_len);
+						if(r == -1){
+							perror("sendto");
+							goto SESSION_CANCELATION;
+						}
 					}
 				}
 			}
 		} // end GAME SESSION LOOP
-		break;
+
+SESSION_CANCELATION: //restart the session
+		for(int i = 0; i < ncli; i++){
+			if(clients[i]->timed_out){
+				continue;
+			}
+			int r = send(queue_pfds[i].fd, "SESSION_CANCELED\r", 17+1, 0);	
+		}
 	}
 
 	close(serv_sock);

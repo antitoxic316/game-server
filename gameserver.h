@@ -32,6 +32,8 @@ struct client {
 	struct obj_data **objs;
 	int objs_n;
   bool ready;
+  bool timed_out;
+  time_t udp_packet_time;
 };
 
 int server_socket_init();

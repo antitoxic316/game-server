@@ -1,0 +1,2 @@
+{"type":"obj_update", "packet":{"obj_name":"suckit", "interpol_fields": ["x", "y"], "values": [20, 10]}, "echo": true, "server_processed": true}
+{"type":"obj_register", "packet":{"obj_name":"suckit", "interpol_fields": ["x", "y"]}, "echo":false, "server_processed": true}

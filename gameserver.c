@@ -133,6 +133,8 @@ struct client *accept_client(
 	client_info->addr_len = sizeof client_info->addr;
 
 	client_info->ready = false;
+	client_info->timed_out = false;
+	client_info->udp_packet_time = 0;
 
 	return client_info;
 }
