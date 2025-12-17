@@ -179,9 +179,9 @@ int main(void)
 			bool is_unique = false;
 			do {
 				printf("checking for client\n");
-				int r = recvfrom(session_pfds[i].fd, buff, 7, 0, 
-												 (struct sockaddr*) &tmp_addr, 
-												 &tmp_addr_len);	
+				recvfrom(session_pfds[i].fd, buff, 7, 0, 
+								 (struct sockaddr*) &tmp_addr, 
+								 &tmp_addr_len);	
 				
 				is_unique = true;
 				for(int j = 0; j < ncli; j++){
@@ -248,6 +248,8 @@ int main(void)
 							cli->timed_out = true;
 							printf("client got timed out\n");
 							goto SESSION_CANCELATION;
+						} else {
+							cli->udp_packet_time = time(NULL);
 						}
 					} else {
 						cli->udp_packet_time = time(NULL);
@@ -282,7 +284,7 @@ SESSION_CANCELATION: //restart the session
 			if(clients[i]->timed_out){
 				continue;
 			}
-			int r = send(queue_pfds[i].fd, "SESSION_CANCELED\r", 17+1, 0);	
+			send(queue_pfds[i].fd, "SESSION_CANCELED\r", 17+1, 0);	
 		}
 	}
 
