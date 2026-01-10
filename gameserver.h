@@ -24,18 +24,17 @@ struct obj_data {
   size_t nfields;
 };
 
-struct client {
-	int tcp_sock;
-	int udp_sock;
-  struct sockaddr_storage addr;
-  socklen_t addr_len;
-	struct obj_data **objs;
+struct client {            
+	int tcp_sock;            
+	int udp_sock;                    
+  struct sockaddr_storage addr;     
+  socklen_t addr_len;                
+	struct obj_data **objs;           
 	int objs_n;
   bool ready;
   bool timed_out;
   time_t udp_packet_time;
 };
-
 int server_socket_init();
 
 void pfds_add_client(struct pollfd *pfds[], int *size, int ncli, int sockfd, short events);

@@ -134,7 +134,7 @@ struct client *accept_client(
 
 	client_info->ready = false;
 	client_info->timed_out = false;
-	client_info->udp_packet_time = 0;
+	client_info->udp_packet_time = 0;	
 
 	return client_info;
 }
@@ -277,7 +277,6 @@ void client_handle_packet(struct client* cli, char *buff, size_t nbuff, int *ech
 				printf("%s %d\n", target_obj->interpol_fields[target_field_i], target_value->valueint);
 			}
 			printf("%s\n", item->valuestring);
-
 		}
 	}
 
