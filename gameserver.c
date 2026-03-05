@@ -283,7 +283,7 @@ void client_handle_packet(struct client* cli, char *buff, size_t nbuff, int *ech
 cleanup:
 	const char *error_ptr = cJSON_GetErrorPtr();
 	if (error_ptr != NULL) {
-			printf("Error: %s\n", error_ptr);
+		//printf("Error: %s\n", error_ptr);
 	}
 	cJSON_Delete(json);
 }

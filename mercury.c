@@ -122,10 +122,12 @@ int main(void)
 						goto SESSION_CANCELATION;
 					}
 
-					printf("tcp: %s\n", buff);
-					for (int i = 0; i < 256; i++)
-    				printf("%02X ", buff[i]);
-					printf("\n");
+					if(buff[0]){
+						printf("tcp: %s\n", buff);
+						for (int i = 0; i < 256; i++)
+							printf("%02X ", buff[i]);
+						printf("\n");
+					}
 					if(strstr(buff, "READY")){
 						cli->ready = true;
 						continue;
@@ -306,10 +308,11 @@ int main(void)
 					char buff[256] = {'\0',};
 					int r = recv(tcp_pfds[i].fd, buff, 256-1, 0);	
 					if(r <= 0){
-						if(errno != EAGAIN && errno != EWOULDBLOCK){
-							perror("recvfrom");
-							goto SESSION_CANCELATION;
+						if(errno == EAGAIN || errno == EWOULDBLOCK){
+							continue; // let server read from other clients
 						}
+						perror("recvfrom");
+						goto SESSION_CANCELATION;
 					}
 
 					struct client* cli = NULL;
@@ -325,10 +328,12 @@ int main(void)
 						goto SESSION_CANCELATION;
 					}
 
-					printf("tcp: %s; r: %d\n", buff, r);
-					for (int i = 0; i < 256; i++)
-    				printf("%02X ", buff[i]);
-					printf("\n");
+					if(buff[0]){
+						printf("tcp: %s; r: %d\n", buff, r);
+						for (int i = 0; i < 256; i++)
+							printf("%02X ", buff[i]);
+						printf("\n");
+					}
 					int echo_packet = 0;
 					client_handle_packet(cli, buff, 256-1, &echo_packet);
 					
